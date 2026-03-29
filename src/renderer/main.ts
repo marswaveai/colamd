@@ -1,13 +1,20 @@
-import { createEditor, getMarkdown, setMarkdown } from './editor/editor'
+import { createEditor, getMarkdown, getHTML, setMarkdown } from './editor/editor'
 import { applyTheme, loadSavedTheme } from './themes/theme-manager'
 import './themes/base.css'
 
 async function init(): Promise<void> {
-  applyTheme(loadSavedTheme())
+  const api = window.electronAPI
+  const savedTheme = loadSavedTheme()
+  applyTheme(savedTheme)
+
+  // Restore custom theme CSS from disk
+  if (savedTheme.startsWith('custom:')) {
+    const fileName = savedTheme.slice(7)
+    const css = await api.loadThemeCSS(fileName)
+    if (css) applyTheme(savedTheme, css)
+  }
 
   await createEditor('editor')
-
-  const api = window.electronAPI
 
   api.onMenuOpen(async () => {
     const result = await api.openFile()
@@ -17,14 +24,30 @@ async function init(): Promise<void> {
   api.onMenuSave(() => api.saveFile(getMarkdown()))
   api.onMenuSaveAs(() => api.saveFileAs(getMarkdown()))
   api.onMenuExportPDF(() => api.exportPDF())
+  api.onMenuExportHTML(() => {
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>ColaMD Export</title>
+<style>body{max-width:780px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.75;color:#24292f}h1{font-size:2em;border-bottom:1px solid #d0d7de;padding-bottom:.3em}h2{font-size:1.5em;border-bottom:1px solid #d0d7de;padding-bottom:.25em}h3{font-size:1.25em}code{background:rgba(175,184,193,.2);padding:2px 6px;border-radius:3px;font-size:.875em}pre{background:#f6f8fa;padding:16px;border-radius:6px;overflow-x:auto}pre code{background:none;padding:0}blockquote{border-left:4px solid #d0d7de;padding-left:16px;color:#656d76}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d0d7de;padding:8px 12px}th{background:#f6f8fa}a{color:#0969da}img{max-width:100%}</style>
+</head><body>${getHTML()}</body></html>`
+    api.exportHTML(html)
+  })
   api.onNewFile(() => setMarkdown(''))
   api.onFileOpened((data) => setMarkdown(data.content))
   api.onFileChanged((content) => setMarkdown(content))
   api.onSetTheme((theme) => applyTheme(theme))
+  api.onSetCustomCSS((css) => {
+    const theme = loadSavedTheme()
+    applyTheme(theme, css)
+  })
 
   api.onMenuImportTheme(async () => {
-    const css = await api.loadCustomTheme()
-    if (css) applyTheme('custom', css)
+    const result = await api.loadCustomTheme()
+    if (result) applyTheme(`custom:${result.name}`, result.css)
+  })
+
+  const agentDot = document.getElementById('agent-dot')
+  api.onAgentActivity((state) => {
+    if (agentDot) agentDot.className = state === 'idle' ? '' : state
   })
 
   // Handle drag-and-drop of text files

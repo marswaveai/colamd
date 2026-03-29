@@ -1,6 +1,6 @@
 {
   "name": "colamd",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "The Agent Native Markdown Editor",
   "main": "dist/main/index.js",
   "author": {
@@ -23,7 +23,8 @@
     "dist:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
-    "@milkdown/kit": "^7.19.2"
+    "@milkdown/kit": "^7.19.2",
+    "remark-breaks": "^4.0.0"
   },
   "devDependencies": {
     "electron": "^34.0.0",

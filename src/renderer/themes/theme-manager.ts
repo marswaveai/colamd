@@ -12,6 +12,7 @@ export function applyTheme(name: string, customCSS?: string): void {
 
   // Remove all theme classes
   Object.values(themes).forEach(cls => body.classList.remove(cls))
+  body.classList.remove('theme-custom')
 
   // Remove custom theme style
   if (customStyleEl) {
@@ -19,10 +20,12 @@ export function applyTheme(name: string, customCSS?: string): void {
     customStyleEl = null
   }
 
-  if (name === 'custom' && customCSS) {
-    customStyleEl = document.createElement('style')
-    customStyleEl.textContent = customCSS
-    document.head.appendChild(customStyleEl)
+  if (customCSS || name.startsWith('custom:')) {
+    if (customCSS) {
+      customStyleEl = document.createElement('style')
+      customStyleEl.textContent = customCSS
+      document.head.appendChild(customStyleEl)
+    }
     body.classList.add('theme-custom')
   } else if (themes[name]) {
     body.classList.add(themes[name])

@@ -16,6 +16,37 @@ html, body {
   -webkit-app-region: drag;
   height: 52px;
   flex-shrink: 0;
+  position: relative;
+}
+
+#agent-dot {
+  position: absolute;
+  top: 22px;
+  right: 16px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.3;
+  -webkit-app-region: no-drag;
+  transition: background 0.3s ease, opacity 0.3s ease;
+}
+
+#agent-dot.active {
+  background: #e8913a;
+  opacity: 1;
+  animation: agent-breathe 2s ease-in-out infinite;
+}
+
+#agent-dot.cooldown {
+  background: #3dba5c;
+  opacity: 1;
+  animation: none;
+}
+
+@keyframes agent-breathe {
+  0%, 100% { opacity: 0.45; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1.05); }
 }
 
 #editor {
@@ -102,6 +133,7 @@ html, body {
 
 #editor .ProseMirror pre {
   background: var(--code-block-bg);
+  color: var(--code-block-text, var(--text-color));
   padding: 16px;
   border-radius: 6px;
   overflow-x: auto;
@@ -208,15 +240,49 @@ body.theme-elegant {
   --text-muted: #777;
   --border-color: #d8d3ce;
   --link-color: #c44b2b;
-  --code-bg: rgba(196, 75, 43, 0.08);
-  --code-block-bg: #e8e4df;
+  --code-bg: #e8e4df;
+  --code-block-bg: #2c2c2c;
+  --code-block-text: #e0dcd7;
   --blockquote-border: #c44b2b;
-  --table-header-bg: #e8e4df;
+  --blockquote-bg: #eae6e1;
+  --table-header-bg: #eae6e1;
+  --table-border: #d8d3ce;
   --selection-bg: rgba(196, 75, 43, 0.2);
 }
 
 body.theme-elegant #editor .ProseMirror {
-  font-family: Georgia, 'Palatino Linotype', serif;
+  font-family: 'LXGW WenKai', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', Georgia, serif;
+  line-height: 1.9;
+}
+
+body.theme-elegant #editor .ProseMirror strong {
+  color: #c44b2b;
+}
+
+body.theme-elegant #editor .ProseMirror code {
+  color: #c44b2b;
+}
+
+body.theme-elegant #editor .ProseMirror pre {
+  color: var(--code-block-text);
+}
+
+body.theme-elegant #editor .ProseMirror pre code {
+  color: inherit;
+}
+
+body.theme-elegant #editor .ProseMirror blockquote {
+  background: var(--blockquote-bg);
+  padding: 15px 20px 15px 25px;
+}
+
+body.theme-elegant #editor .ProseMirror table th {
+  border-bottom: 2px solid #c44b2b;
+}
+
+body.theme-elegant #editor .ProseMirror table td {
+  border-left: none;
+  border-right: none;
 }
 
 body.theme-newsprint {

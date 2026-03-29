@@ -6,8 +6,11 @@ export interface ElectronAPI {
   saveFile: (content: string) => Promise<boolean>
   saveFileAs: (content: string) => Promise<boolean>
   exportPDF: () => Promise<boolean>
-  loadCustomTheme: () => Promise<string | null>
+  exportHTML: (html: string) => Promise<boolean>
+  loadCustomTheme: () => Promise<{ name: string; css: string } | null>
+  loadThemeCSS: (fileName: string) => Promise<string | null>
   getPathForFile: (file: File) => string
+  openExternal: (url: string) => void
   onFileChanged: (callback: (content: string) => void) => void
   onNewFile: (callback: () => void) => void
   onFileOpened: (callback: (data: { path: string; content: string }) => void) => void
@@ -15,8 +18,11 @@ export interface ElectronAPI {
   onMenuSave: (callback: () => void) => void
   onMenuSaveAs: (callback: () => void) => void
   onMenuExportPDF: (callback: () => void) => void
+  onMenuExportHTML: (callback: () => void) => void
   onSetTheme: (callback: (theme: string) => void) => void
+  onSetCustomCSS: (callback: (css: string) => void) => void
   onMenuImportTheme: (callback: () => void) => void
+  onAgentActivity: (callback: (state: string) => void) => void
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -25,8 +31,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveFile: (content: string) => ipcRenderer.invoke('save-file', content),
   saveFileAs: (content: string) => ipcRenderer.invoke('save-file-as', content),
   exportPDF: () => ipcRenderer.invoke('export-pdf'),
+  exportHTML: (html: string) => ipcRenderer.invoke('export-html', html),
   loadCustomTheme: () => ipcRenderer.invoke('load-custom-theme'),
+  loadThemeCSS: (fileName: string) => ipcRenderer.invoke('load-theme-css', fileName),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  openExternal: (url: string) => ipcRenderer.send('open-external', url),
   onFileChanged: (callback: (content: string) => void) => {
     ipcRenderer.on('file-changed', (_event, content) => callback(content))
   },
@@ -48,10 +57,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuExportPDF: (callback: () => void) => {
     ipcRenderer.on('menu-export-pdf', () => callback())
   },
+  onMenuExportHTML: (callback: () => void) => {
+    ipcRenderer.on('menu-export-html', () => callback())
+  },
   onSetTheme: (callback: (theme: string) => void) => {
     ipcRenderer.on('set-theme', (_event, theme) => callback(theme))
   },
+  onSetCustomCSS: (callback: (css: string) => void) => {
+    ipcRenderer.on('set-custom-css', (_event, css) => callback(css))
+  },
   onMenuImportTheme: (callback: () => void) => {
     ipcRenderer.on('menu-import-theme', () => callback())
+  },
+  onAgentActivity: (callback: (state: string) => void) => {
+    ipcRenderer.on('agent-activity', (_event, state) => callback(state))
   }
 } satisfies ElectronAPI)

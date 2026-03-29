@@ -23,11 +23,23 @@ This is what **Agent Native** means: built from the ground up for a world where 
 
 ## Features
 
+### Agent Native
+
 - **Live Agent Sync** — When an AI agent (Claude Code, Cursor, Copilot, etc.) modifies your `.md` file, ColaMD detects the change and refreshes instantly. This is the core feature.
+- **Agent Activity Indicator** — A subtle dot in the titlebar shows you when an agent is writing: orange breathing pulse while active, green flash when done. You always know if your agent is working.
+- **Cmd+Click Links** — Click any link in the editor to open it in your browser.
+
+### Editor
+
 - **True WYSIWYG** — Type Markdown, see rich text. No split-pane preview.
+- **Smart Line Breaks** — Single newlines render as line breaks, matching how AI agents write Markdown.
+- **Rich Text Copy** — Copy content and paste into WeChat, email, or any rich text editor with formatting preserved.
 - **Minimal by Design** — No toolbar, no sidebar, no distractions. Just your content.
-- **Themes** — 4 built-in themes + import custom CSS. Elegant theme by default.
-- **Export** — PDF.
+
+### Themes & Export
+
+- **Themes** — 4 built-in themes + [downloadable themes](themes/) + import custom CSS.
+- **Export** — PDF and HTML.
 - **Cross-platform** — macOS, Windows, Linux.
 
 ## Download
@@ -48,7 +60,7 @@ This is what **Agent Native** means: built from the ground up for a world where 
 │ (Claude,    │                │              │
 │  Cursor...) │                └──────┬───────┘
 └─────────────┘                       │
-                                fs.watch detects
+                              fs.watch detects
                                       │
                               ┌───────▼───────┐
                               │    ColaMD     │
@@ -59,7 +71,7 @@ This is what **Agent Native** means: built from the ground up for a world where 
 
 1. Open any `.md` file in ColaMD
 2. Let your AI agent edit that file
-3. Watch the content update in real-time
+3. Watch the content update in real-time — the indicator dot pulses orange while the agent writes
 
 No configuration needed. It just works.
 
@@ -76,7 +88,9 @@ One thing, done well.
 
 ## Custom Themes
 
-ColaMD supports custom CSS themes. See the [`themes/`](themes/) folder for documentation on creating your own theme, or import any `.css` file via **Theme → Import Theme**.
+ColaMD supports custom CSS themes. Download themes from the [`themes/`](themes/) folder, or create your own and import via **Theme > Import Theme**.
+
+Imported themes are saved to `~/.colamd/themes/` and persist across sessions.
 
 ## Development
 
@@ -106,9 +120,10 @@ npm run dist:linux
 
 ColaMD will evolve alongside the agent ecosystem:
 
-- v1.1 — Live file reload, file associations, drag & drop, themes (current)
-- v1.2 — Cmd+click links, heading level switching
-- Future — Bidirectional sync, multi-file watching, agent activity indicators
+- v1.1 — Live file reload, file associations, drag & drop, themes
+- v1.2 — New icon
+- v1.3 — Agent activity indicator, Cmd+click links, rich text copy, smart line breaks, PDF/HTML export, theme persistence (current)
+- Future — Bidirectional sync, multi-file watching
 
 ## License
 
