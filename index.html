@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ColaMD — The Agent Native Markdown Editor</title>
 <meta name="description" content="Real-time collaboration between humans and AI agents. See your agent's changes as they happen.">
+<link rel="icon" type="image/svg+xml" href="resources/icon.svg">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -34,18 +35,16 @@
   }
 
   .logo {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    display: inline-block;
     width: 48px;
     height: 48px;
     border-radius: 12px;
-    border: 2px solid #d8d3ce;
-    font-family: Georgia, serif;
-    font-weight: 700;
-    font-size: 15px;
-    color: #c44b2b;
-    user-select: none;
+    overflow: hidden;
+  }
+
+  .logo img {
+    width: 100%;
+    height: 100%;
   }
 
   nav .links {
@@ -308,7 +307,7 @@
 <div class="container">
 
   <nav>
-    <div class="logo">CMD</div>
+    <div class="logo"><img src="resources/icon.svg" alt="ColaMD"></div>
     <div class="links">
       <a href="#features">Features</a>
       <a href="#download">Download</a>
