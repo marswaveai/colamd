@@ -6,3 +6,7 @@ release/
 .claude/
 *.env
 log.md
+
+# Agent Loop logs (迭代日志，不提交到仓库)
+agent-loop-logs/
+agent-loop.yaml

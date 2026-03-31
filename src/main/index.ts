@@ -1,10 +1,25 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron'
 import { join, basename } from 'path'
-import { readFile, writeFile, readdir, copyFile, mkdir } from 'fs/promises'
+import { readFile, writeFile, readdir, copyFile, mkdir, stat } from 'fs/promises'
 import { watch, FSWatcher, existsSync, readdirSync } from 'fs'
 
 // Custom themes directory
+// Agent detection constants
+const AGENT_ACTIVE_GAP_MS = 2000
+const AGENT_COOLDOWN_MS = 3000
+const AGENT_IDLE_MS = 2000
+const FILE_DEBOUNCE_MS = 100
+const INTERNAL_SAVE_SUPPRESS_MS = 250
+
 const themesDir = join(app.getPath('home'), '.colamd', 'themes')
+const MAX_OPEN_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+
+async function readTextDocument(filePath: string): Promise<string> {
+  const info = await stat(filePath)
+  if (!info.isFile()) throw new Error('Not a regular file')
+  if (info.size > MAX_OPEN_FILE_SIZE) throw new Error('File too large for live sync')
+  return readFile(filePath, 'utf-8')
+}
 
 function ensureThemesDir(): void {
   if (!existsSync(themesDir)) {
@@ -12,11 +27,6 @@ function ensureThemesDir(): void {
   }
 }
 
-async function scanCustomThemes(): Promise<string[]> {
-  try {
-    const files = await readdir(themesDir)
-    return files.filter(f => f.endsWith('.css')).sort()
-  } catch {
     return []
   }
 }
@@ -108,6 +118,10 @@ function stopWatching(state: WindowState): void {
     state.watcher.close()
     state.watcher = null
   }
+  if (state.debounceTimer) {
+    clearTimeout(state.debounceTimer)
+    state.debounceTimer = null
+  }
   if (state.agentCooldownTimer) {
     clearTimeout(state.agentCooldownTimer)
     state.agentCooldownTimer = null
@@ -130,13 +144,13 @@ function transitionAgentState(win: BrowserWindow, state: WindowState, newState: 
     // Reset cooldown timer — 3s after last write
     state.agentCooldownTimer = setTimeout(() => {
       transitionAgentState(win, state, 'cooldown')
-    }, 3000)
+    }, AGENT_COOLDOWN_MS)
   } else if (newState === 'cooldown') {
     state.agentState = 'cooldown'
     if (!win.isDestroyed()) win.webContents.send('agent-activity', 'cooldown')
     state.agentCooldownTimer = setTimeout(() => {
       transitionAgentState(win, state, 'idle')
-    }, 2000)
+    }, AGENT_IDLE_MS)
   } else {
     state.agentState = 'idle'
     if (!win.isDestroyed()) win.webContents.send('agent-activity', 'idle')
@@ -147,17 +161,26 @@ function watchFile(win: BrowserWindow, state: WindowState): void {
   if (!state.filePath) return
   stopWatching(state)
   const filePath = state.filePath
-  state.watcher = watch(filePath, (eventType) => {
-    if (eventType !== 'change' || state.isInternalSave) return
+  state.watcher = watch(filePath, { persistent: false }, (eventType) => {
+    if (state.isInternalSave) return
+
+    // Handle rename (atomic saves from editors like vim)
+    if (eventType === 'rename') {
+      stopWatching(state)
+      setTimeout(() => watchFile(win, state), 50)
+      return
+    }
+
+    if (eventType !== 'change') return
 
     // Agent activity detection
     const now = Date.now()
     const gap = now - state.lastExternalChange
     state.lastExternalChange = now
-    if (gap > 0 && gap < 2000) {
+    if (gap > 0 && gap < AGENT_ACTIVE_GAP_MS) {
       transitionAgentState(win, state, 'active')
     } else if (state.agentState === 'active') {
-      transitionAgentState(win, state, 'active') // reset cooldown timer
+      transitionAgentState(win, state, 'active')
     }
 
     if (state.debounceTimer) clearTimeout(state.debounceTimer)
@@ -168,6 +191,12 @@ function watchFile(win: BrowserWindow, state: WindowState): void {
         })
         .catch(() => {})
     }, 100)
+  })
+
+  state.watcher.on('error', (error) => {
+    console.error('[watchFile] watcher error:', error)
+    stopWatching(state)
+    setTimeout(() => watchFile(win, state), 500)
   })
 }
 
@@ -236,7 +265,7 @@ async function saveToPath(win: BrowserWindow, filePath: string, content: string)
   } catch {
     return false
   } finally {
-    setTimeout(() => { state.isInternalSave = false }, 100)
+    setTimeout(() => { state.isInternalSave = false }, INTERNAL_SAVE_SUPPRESS_MS)
   }
 }
 
@@ -283,7 +312,7 @@ ipcMain.handle('open-file', async (event) => {
 
 ipcMain.handle('open-file-path', async (event, filePath: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return null
+  if (!win || typeof filePath !== 'string' || !filePath) return null
   const state = getState(win)
 
   // If this window has no file, load here
@@ -305,7 +334,7 @@ ipcMain.handle('open-file-path', async (event, filePath: string) => {
 
 ipcMain.handle('save-file', async (event, content: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return false
+  if (!win || typeof content !== 'string') return false
   const state = getState(win)
   if (!state.filePath) {
     const result = await dialog.showSaveDialog(win, {
@@ -323,7 +352,7 @@ ipcMain.handle('save-file', async (event, content: string) => {
 
 ipcMain.handle('save-file-as', async (event, content: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return false
+  if (!win || typeof content !== 'string') return false
   const result = await dialog.showSaveDialog(win, {
     defaultPath: suggestFileName(win, content),
     filters: [
@@ -364,7 +393,7 @@ ipcMain.handle('export-pdf', async (event) => {
 
 ipcMain.handle('export-html', async (event, htmlContent: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return false
+  if (!win || typeof htmlContent !== 'string') return false
   const result = await dialog.showSaveDialog(win, {
     defaultPath: suggestFileName(win),
     filters: [{ name: 'HTML', extensions: ['html'] }]
@@ -401,9 +430,16 @@ ipcMain.handle('load-custom-theme', async (event) => {
   }
 })
 
+function resolveThemePath(fileName: string): string | null {
+  if (!fileName.endsWith('.css') || basename(fileName) !== fileName || fileName.includes('..')) return null
+  return join(themesDir, fileName)
+}
+
 ipcMain.handle('load-theme-css', async (_event, fileName: string) => {
   try {
-    return await readFile(join(themesDir, fileName), 'utf-8')
+    const themePath = resolveThemePath(fileName)
+    if (!themePath) return null
+    return await readFile(themePath, 'utf-8')
   } catch {
     return null
   }

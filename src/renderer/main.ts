@@ -24,6 +24,7 @@ async function init(): Promise<void> {
   api.onMenuSave(() => api.saveFile(getMarkdown()))
   api.onMenuSaveAs(() => api.saveFileAs(getMarkdown()))
   api.onMenuExportPDF(() => api.exportPDF())
+
   api.onMenuExportHTML(() => {
     const s = getComputedStyle(document.body)
     const v = (name: string) => s.getPropertyValue(name).trim()
@@ -40,7 +41,6 @@ async function init(): Promise<void> {
     const tableHeaderBg = v('--table-header-bg')
     const selectionBg = v('--selection-bg')
 
-    // Get computed styles from actual editor elements
     const editor = document.querySelector('#editor .ProseMirror')
     const fontFamily = editor ? getComputedStyle(editor).fontFamily : '-apple-system,BlinkMacSystemFont,sans-serif'
 
@@ -72,11 +72,15 @@ img{max-width:100%}
 ::selection{background:${selectionBg}}
 </style>
 </head><body>${getHTML()}</body></html>`
-    api.exportHTML(html)
+    api.exportHTML(sanitizeExportHTML(html))
   })
+
   api.onNewFile(() => setMarkdown(''))
   api.onFileOpened((data) => setMarkdown(data.content))
-  api.onFileChanged((content) => setMarkdown(content))
+
+  // file-changed: show diff highlight for agent changes
+  api.onFileChanged((content) => setMarkdown(content, true))
+
   api.onSetTheme((theme) => applyTheme(theme))
   api.onSetCustomCSS((css) => {
     const theme = loadSavedTheme()
@@ -104,6 +108,18 @@ img{max-width:100%}
     const result = await api.openFilePath(filePath)
     if (result) setMarkdown(result.content)
   })
+}
+
+// HTML export sanitization: remove dangerous tags
+const DANGEROUS_TAGS = /<(script|iframe|object|embed|form|input|button|textarea|select|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi
+const DANGEROUS_OPEN = /<(script|iframe|object|embed|form|input|button|textarea|select|style)\b[^>]*\/?>\s*/gi
+const DANGEROUS_ATTRS = /\s+on\w+\s*=\s*("[^"]*"|'[^']*'|\S+)/gi
+
+function sanitizeExportHTML(html: string): string {
+  return html
+    .replace(DANGEROUS_TAGS, '')
+    .replace(DANGEROUS_OPEN, '')
+    .replace(DANGEROUS_ATTRS, '')
 }
 
 init().catch((e) => console.error('ColaMD init failed:', e))

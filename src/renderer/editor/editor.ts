@@ -12,6 +12,8 @@ import { htmlView } from './html-view'
 import '@milkdown/kit/prose/view/style/prosemirror.css'
 
 let editorInstance: Editor | null = null
+let previousNodeTexts: string[] = []
+let diffFadeoutTimer: ReturnType<typeof setTimeout> | null = null
 
 const inlineStyles: Record<string, string> = {
   'h1': 'font-size:1.8em;font-weight:700;margin:1em 0 .5em;padding-bottom:.3em;border-bottom:1px solid #eee;',
@@ -48,7 +50,6 @@ function enhanceClipboard(e: ClipboardEvent): void {
     })
   }
 
-  // pre > code: override code style inside code blocks
   doc.querySelectorAll('pre code').forEach((el) => {
     ;(el as HTMLElement).setAttribute('style', 'background:none;padding:0;font-size:.875em;line-height:1.6;font-family:Menlo,Monaco,monospace;')
   })
@@ -60,6 +61,52 @@ const defaultContent = `# Welcome to ColaMD
 
 Start typing here...
 `
+
+// --- Agent Diff View ---
+
+function snapshotNodes(root: HTMLElement): string[] {
+  const pm = root.querySelector('.ProseMirror')
+  if (!pm) return []
+  const texts: string[] = []
+  for (const child of pm.children) {
+    texts.push(child.textContent || '')
+  }
+  return texts
+}
+
+function applyDiffHighlight(root: HTMLElement): void {
+  if (previousNodeTexts.length === 0) return
+  const pm = root.querySelector('.ProseMirror')
+  if (!pm) return
+
+  const children = Array.from(pm.children)
+  for (let i = 0; i < children.length; i++) {
+    const node = children[i] as HTMLElement
+    const currentText = node.textContent || ''
+    const prevText = i < previousNodeTexts.length ? previousNodeTexts[i] : null
+
+    if (prevText === null || currentText !== prevText) {
+      node.classList.add('agent-diff-added')
+    }
+  }
+
+  scheduleDiffFadeout(root)
+}
+
+function scheduleDiffFadeout(root: HTMLElement): void {
+  if (diffFadeoutTimer) clearTimeout(diffFadeoutTimer)
+  diffFadeoutTimer = setTimeout(() => {
+    root.querySelectorAll('.agent-diff-added').forEach((el) => {
+      el.classList.add('agent-diff-fadeout')
+      el.addEventListener('animationend', () => {
+        el.classList.remove('agent-diff-added', 'agent-diff-fadeout')
+      }, { once: true })
+    })
+    diffFadeoutTimer = null
+  }, 5000)
+}
+
+// --- Editor ---
 
 export async function createEditor(
   rootId: string,
@@ -87,11 +134,11 @@ export async function createEditor(
     .use(htmlView)
     .create()
 
-  // Enhance clipboard with inline styles for rich text paste (e.g. WeChat)
+  // Enhance clipboard with inline styles for rich text paste
   root.addEventListener('copy', enhanceClipboard)
   root.addEventListener('cut', enhanceClipboard)
 
-  // Cmd+click (Mac) / Ctrl+click (Win/Linux) to open links in browser
+  // Cmd+click to open links
   root.addEventListener('click', (e) => {
     if (!(e.metaKey || e.ctrlKey)) return
     const link = (e.target as HTMLElement).closest('a')
@@ -130,7 +177,17 @@ export function getHTML(): string {
   return html
 }
 
-export function setMarkdown(content: string): void {
+export function setMarkdown(content: string, showDiff: boolean = false): void {
   if (!editorInstance) return
+  const root = document.getElementById('editor')
+
+  if (showDiff && root) {
+    previousNodeTexts = snapshotNodes(root)
+  }
+
   editorInstance.action(replaceAll(content))
+
+  if (showDiff && root) {
+    requestAnimationFrame(() => applyDiffHighlight(root))
+  }
 }

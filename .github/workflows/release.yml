@@ -30,6 +30,9 @@ jobs:
 
       - run: npm install
 
+      - name: Type check
+        run: node node_modules/typescript/bin/tsc -p tsconfig.main.json --noEmit && node node_modules/typescript/bin/tsc -p tsconfig.preload.json --noEmit && node node_modules/typescript/bin/tsc -p tsconfig.renderer.json --noEmit
+
       - run: npm run build
 
       - name: Build distributables
