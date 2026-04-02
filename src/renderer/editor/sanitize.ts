@@ -61,13 +61,22 @@ export function sanitizeHTMLFragment(raw: string): string {
       node.setAttribute('rel', 'noopener noreferrer')
     }
 
+    // Collect promoted children before processing so we can recurse into them
+    const promoted: Element[] = []
     for (const child of Array.from(node.children)) {
       const tagName = child.tagName.toLowerCase()
       if (!ALLOWED_HTML_TAGS.has(tagName)) {
-        child.replaceWith(...Array.from(child.childNodes))
+        // collect childNodes BEFORE replaceWith mutates the DOM
+        const childNodes = Array.from(child.childNodes)
+        promoted.push(...Array.from(childNodes).filter((n): n is Element => n instanceof Element))
+        child.replaceWith(...childNodes)
       } else {
         walk(child)
       }
+    }
+    // Walk promoted elements so their attributes are also sanitized
+    for (const el of promoted) {
+      walk(el)
     }
   }
 

@@ -163,6 +163,22 @@ html, body {
   animation: none;
 }
 
+/* Agent diff highlight */
+#editor .ProseMirror .agent-diff-added {
+  background: rgba(63, 185, 80, 0.15);
+  border-radius: 3px;
+  transition: background 0.3s ease;
+}
+
+#editor .ProseMirror .agent-diff-fadeout {
+  animation: agent-diff-fadeout 0.4s ease forwards;
+}
+
+@keyframes agent-diff-fadeout {
+  0% { background: rgba(63, 185, 80, 0.25); }
+  100% { background: transparent; }
+}
+
 @keyframes agent-breathe {
   0%, 100% { opacity: 0.45; transform: scale(0.95); }
   50% { opacity: 1; transform: scale(1.05); }

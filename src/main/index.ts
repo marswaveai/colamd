@@ -192,40 +192,47 @@ function watchFile(win: BrowserWindow, state: WindowState): void {
   if (!state.filePath) return
   stopWatching(state)
   const filePath = state.filePath
-  state.watcher = watch(filePath, { persistent: false }, (eventType) => {
-    if (state.isInternalSave) return
+  try {
+    state.watcher = watch(filePath, { persistent: false }, (eventType) => {
+      if (state.isInternalSave) return
 
-    // Handle rename (atomic saves from editors like vim)
-    if (eventType === 'rename') {
-      stopWatching(state)
-      setTimeout(() => watchFile(win, state), 50)
-      return
-    }
+      // Handle rename (atomic saves from editors like vim)
+      if (eventType === 'rename') {
+        stopWatching(state)
+        setTimeout(() => watchFile(win, state), 50)
+        return
+      }
 
-    if (eventType !== 'change') return
+      if (eventType !== 'change') return
 
-    // Agent activity detection
-    const now = Date.now()
-    const gap = now - state.lastExternalChange
-    state.lastExternalChange = now
-    if (gap > 0 && gap < AGENT_ACTIVE_GAP_MS) {
-      transitionAgentState(win, state, 'active')
-    } else if (state.agentState === 'active') {
-      transitionAgentState(win, state, 'active')
-    }
+      // Agent activity detection
+      const now = Date.now()
+      const gap = now - state.lastExternalChange
+      state.lastExternalChange = now
+      if (gap > 0 && gap < AGENT_ACTIVE_GAP_MS) {
+        transitionAgentState(win, state, 'active')
+      } else if (state.agentState === 'active') {
+        transitionAgentState(win, state, 'active')
+      }
 
-    if (state.debounceTimer) clearTimeout(state.debounceTimer)
-    state.debounceTimer = setTimeout(() => {
-      readTextDocument(filePath)
-        .then((data) => {
-          if (!win.isDestroyed()) win.webContents.send('file-changed', data)
-        })
-        .catch((error) => {
-          console.error('[watchFile] read error:', error)
-          sendError(win, formatReadError(error))
-        })
-    }, FILE_DEBOUNCE_MS)
-  })
+      if (state.debounceTimer) clearTimeout(state.debounceTimer)
+      state.debounceTimer = setTimeout(() => {
+        readTextDocument(filePath)
+          .then((data) => {
+            if (!win.isDestroyed()) win.webContents.send('file-changed', data)
+          })
+          .catch((error) => {
+            console.error('[watchFile] read error:', error)
+            sendError(win, formatReadError(error))
+          })
+      }, FILE_DEBOUNCE_MS)
+    })
+  } catch (error) {
+    console.error('[watchFile] watch error:', error)
+    stopWatching(state)
+    setTimeout(() => watchFile(win, state), 500)
+    return
+  }
 
   state.watcher.on('error', (error) => {
     console.error('[watchFile] watcher error:', error)
