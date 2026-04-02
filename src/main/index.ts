@@ -198,8 +198,26 @@ function watchFile(win: BrowserWindow, state: WindowState): void {
 
       // Handle rename (atomic saves from editors like vim)
       if (eventType === 'rename') {
-        stopWatching(state)
-        setTimeout(() => watchFile(win, state), 50)
+        // Close watcher without resetting agent state
+        if (state.watcher) {
+          state.watcher.close()
+          state.watcher = null
+        }
+        if (state.debounceTimer) {
+          clearTimeout(state.debounceTimer)
+          state.debounceTimer = null
+        }
+        // Re-read immediately since atomic save replaced the file
+        setTimeout(() => {
+          watchFile(win, state)
+          readTextDocument(filePath)
+            .then((data) => {
+              if (!win.isDestroyed()) win.webContents.send('file-changed', data)
+            })
+            .catch((error) => {
+              console.error('[watchFile] rename read error:', error)
+            })
+        }, 50)
         return
       }
 
