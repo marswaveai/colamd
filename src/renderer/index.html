@@ -3,11 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'">
   <title>ColaMD</title>
 </head>
 <body>
-  <div id="titlebar"><div id="agent-dot"></div></div>
+  <div id="titlebar">
+    <div id="agent-meta">
+      <div id="agent-dot"></div>
+      <span id="agent-status">Waiting for agent activity</span>
+      <button id="agent-panel-toggle" type="button" aria-expanded="false">Recent Changes</button>
+    </div>
+  </div>
+  <aside id="agent-panel" hidden>
+    <div id="agent-panel-header">
+      <strong>Recent Agent Changes</strong>
+      <span id="agent-summary">No external updates yet</span>
+    </div>
+    <ol id="agent-change-list"></ol>
+  </aside>
   <div id="editor"></div>
   <script type="module" src="./main.ts"></script>
 </body>

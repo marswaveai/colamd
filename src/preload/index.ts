@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+type Unsubscribe = () => void
+
+function on<T>(channel: string, callback: (payload: T) => void): Unsubscribe {
+  const listener = (_event: Electron.IpcRendererEvent, payload: T) => callback(payload)
+  ipcRenderer.on(channel, listener)
+  return () => ipcRenderer.removeListener(channel, listener)
+}
+
 export interface ElectronAPI {
   openFile: () => Promise<{ path: string; content: string } | null>
   openFilePath: (path: string) => Promise<{ path: string; content: string } | null>
@@ -11,18 +19,19 @@ export interface ElectronAPI {
   loadThemeCSS: (fileName: string) => Promise<string | null>
   getPathForFile: (file: File) => string
   openExternal: (url: string) => void
-  onFileChanged: (callback: (content: string) => void) => void
-  onNewFile: (callback: () => void) => void
-  onFileOpened: (callback: (data: { path: string; content: string }) => void) => void
-  onMenuOpen: (callback: () => void) => void
-  onMenuSave: (callback: () => void) => void
-  onMenuSaveAs: (callback: () => void) => void
-  onMenuExportPDF: (callback: () => void) => void
-  onMenuExportHTML: (callback: () => void) => void
-  onSetTheme: (callback: (theme: string) => void) => void
-  onSetCustomCSS: (callback: (css: string) => void) => void
-  onMenuImportTheme: (callback: () => void) => void
-  onAgentActivity: (callback: (state: string) => void) => void
+  onAppError: (callback: (payload: { message: string }) => void) => Unsubscribe
+  onFileChanged: (callback: (content: string) => void) => Unsubscribe
+  onNewFile: (callback: () => void) => Unsubscribe
+  onFileOpened: (callback: (data: { path: string; content: string }) => void) => Unsubscribe
+  onMenuOpen: (callback: () => void) => Unsubscribe
+  onMenuSave: (callback: () => void) => Unsubscribe
+  onMenuSaveAs: (callback: () => void) => Unsubscribe
+  onMenuExportPDF: (callback: () => void) => Unsubscribe
+  onMenuExportHTML: (callback: () => void) => Unsubscribe
+  onSetTheme: (callback: (theme: string) => void) => Unsubscribe
+  onSetCustomCSS: (callback: (css: string) => void) => Unsubscribe
+  onMenuImportTheme: (callback: () => void) => Unsubscribe
+  onAgentActivity: (callback: (state: string) => void) => Unsubscribe
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -36,40 +45,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadThemeCSS: (fileName: string) => ipcRenderer.invoke('load-theme-css', fileName),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   openExternal: (url: string) => ipcRenderer.send('open-external', url),
-  onFileChanged: (callback: (content: string) => void) => {
-    ipcRenderer.on('file-changed', (_event, content) => callback(content))
-  },
-  onNewFile: (callback: () => void) => {
-    ipcRenderer.on('new-file', () => callback())
-  },
-  onFileOpened: (callback: (data: { path: string; content: string }) => void) => {
-    ipcRenderer.on('file-opened', (_event, data) => callback(data))
-  },
-  onMenuOpen: (callback: () => void) => {
-    ipcRenderer.on('menu-open', () => callback())
-  },
-  onMenuSave: (callback: () => void) => {
-    ipcRenderer.on('menu-save', () => callback())
-  },
-  onMenuSaveAs: (callback: () => void) => {
-    ipcRenderer.on('menu-save-as', () => callback())
-  },
-  onMenuExportPDF: (callback: () => void) => {
-    ipcRenderer.on('menu-export-pdf', () => callback())
-  },
-  onMenuExportHTML: (callback: () => void) => {
-    ipcRenderer.on('menu-export-html', () => callback())
-  },
-  onSetTheme: (callback: (theme: string) => void) => {
-    ipcRenderer.on('set-theme', (_event, theme) => callback(theme))
-  },
-  onSetCustomCSS: (callback: (css: string) => void) => {
-    ipcRenderer.on('set-custom-css', (_event, css) => callback(css))
-  },
-  onMenuImportTheme: (callback: () => void) => {
-    ipcRenderer.on('menu-import-theme', () => callback())
-  },
-  onAgentActivity: (callback: (state: string) => void) => {
-    ipcRenderer.on('agent-activity', (_event, state) => callback(state))
-  }
+  onAppError: (callback) => on('app-error', callback),
+  onFileChanged: (callback) => on('file-changed', callback),
+  onNewFile: (callback) => on('new-file', callback),
+  onFileOpened: (callback) => on('file-opened', callback),
+  onMenuOpen: (callback) => on('menu-open', callback),
+  onMenuSave: (callback) => on('menu-save', callback),
+  onMenuSaveAs: (callback) => on('menu-save-as', callback),
+  onMenuExportPDF: (callback) => on('menu-export-pdf', callback),
+  onMenuExportHTML: (callback) => on('menu-export-html', callback),
+  onSetTheme: (callback) => on('set-theme', callback),
+  onSetCustomCSS: (callback) => on('set-custom-css', callback),
+  onMenuImportTheme: (callback) => on('menu-import-theme', callback),
+  onAgentActivity: (callback) => on('agent-activity', callback)
 } satisfies ElectronAPI)

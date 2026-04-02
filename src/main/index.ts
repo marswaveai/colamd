@@ -1,24 +1,32 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron'
 import { join, basename } from 'path'
-import { readFile, writeFile, readdir, copyFile, mkdir } from 'fs/promises'
-import { watch, FSWatcher, existsSync, readdirSync } from 'fs'
+import { readFile, writeFile, copyFile, mkdir, stat } from 'fs/promises'
+import { watch, FSWatcher, readdirSync } from 'fs'
 
 // Custom themes directory
-const themesDir = join(app.getPath('home'), '.colamd', 'themes')
+// Agent detection constants
+const AGENT_ACTIVE_GAP_MS = 2000
+const AGENT_COOLDOWN_MS = 3000
+const AGENT_IDLE_MS = 2000
+const FILE_DEBOUNCE_MS = 100
+const INTERNAL_SAVE_SUPPRESS_MS = 250
 
-function ensureThemesDir(): void {
-  if (!existsSync(themesDir)) {
-    mkdir(themesDir, { recursive: true }).catch(() => {})
-  }
+const themesDir = join(app.getPath('home'), '.colamd', 'themes')
+const MAX_OPEN_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+
+async function readTextDocument(filePath: string): Promise<string> {
+  const info = await stat(filePath)
+  if (!info.isFile()) throw new Error('Not a regular file')
+  if (info.size > MAX_OPEN_FILE_SIZE) throw new Error('File too large for live sync')
+  return readFile(filePath, 'utf-8')
 }
 
-async function scanCustomThemes(): Promise<string[]> {
-  try {
-    const files = await readdir(themesDir)
-    return files.filter(f => f.endsWith('.css')).sort()
-  } catch {
-    return []
-  }
+async function ensureThemesDir(): Promise<void> {
+  await mkdir(themesDir, { recursive: true })
+}
+
+interface AppErrorPayload {
+  message: string
 }
 
 // Per-window state
@@ -48,6 +56,39 @@ function getWinFromEvent(event: Electron.IpcMainInvokeEvent): BrowserWindow | nu
   return BrowserWindow.fromWebContents(event.sender)
 }
 
+function sendError(win: BrowserWindow, message: string): void {
+  if (!win.isDestroyed()) {
+    win.webContents.send('app-error', { message } satisfies AppErrorPayload)
+  }
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+function formatReadError(error: unknown): string {
+  const message = getErrorMessage(error, 'Could not open file.')
+  if (message === 'Not a regular file') return 'Only regular text files can be opened.'
+  if (message === 'File too large for live sync') return 'This file is too large for live sync.'
+  if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return 'The file no longer exists.'
+  if ((error as NodeJS.ErrnoException | undefined)?.code === 'EACCES') return 'You do not have permission to open this file.'
+  return 'Could not open this file as UTF-8 text.'
+}
+
+async function openDocumentInWindow(win: BrowserWindow, filePath: string): Promise<{ path: string; content: string } | null> {
+  try {
+    const content = await readTextDocument(filePath)
+    const state = getState(win)
+    state.filePath = filePath
+    watchFile(win, state)
+    updateTitle(win)
+    return { path: filePath, content }
+  } catch (error) {
+    sendError(win, formatReadError(error))
+    return null
+  }
+}
+
 function createWindow(filePath?: string): BrowserWindow {
   const win = new BrowserWindow({
     width: 960,
@@ -60,7 +101,7 @@ function createWindow(filePath?: string): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
   })
 
@@ -74,7 +115,7 @@ function createWindow(filePath?: string): BrowserWindow {
 
   win.webContents.on('did-finish-load', () => {
     if (filePath) {
-      loadFileInWindow(win, filePath)
+      void loadFileInWindow(win, filePath)
     }
   })
 
@@ -108,6 +149,10 @@ function stopWatching(state: WindowState): void {
     state.watcher.close()
     state.watcher = null
   }
+  if (state.debounceTimer) {
+    clearTimeout(state.debounceTimer)
+    state.debounceTimer = null
+  }
   if (state.agentCooldownTimer) {
     clearTimeout(state.agentCooldownTimer)
     state.agentCooldownTimer = null
@@ -130,13 +175,13 @@ function transitionAgentState(win: BrowserWindow, state: WindowState, newState: 
     // Reset cooldown timer — 3s after last write
     state.agentCooldownTimer = setTimeout(() => {
       transitionAgentState(win, state, 'cooldown')
-    }, 3000)
+    }, AGENT_COOLDOWN_MS)
   } else if (newState === 'cooldown') {
     state.agentState = 'cooldown'
     if (!win.isDestroyed()) win.webContents.send('agent-activity', 'cooldown')
     state.agentCooldownTimer = setTimeout(() => {
       transitionAgentState(win, state, 'idle')
-    }, 2000)
+    }, AGENT_IDLE_MS)
   } else {
     state.agentState = 'idle'
     if (!win.isDestroyed()) win.webContents.send('agent-activity', 'idle')
@@ -147,40 +192,78 @@ function watchFile(win: BrowserWindow, state: WindowState): void {
   if (!state.filePath) return
   stopWatching(state)
   const filePath = state.filePath
-  state.watcher = watch(filePath, (eventType) => {
-    if (eventType !== 'change' || state.isInternalSave) return
+  try {
+    state.watcher = watch(filePath, { persistent: false }, (eventType) => {
+      if (state.isInternalSave) return
 
-    // Agent activity detection
-    const now = Date.now()
-    const gap = now - state.lastExternalChange
-    state.lastExternalChange = now
-    if (gap > 0 && gap < 2000) {
-      transitionAgentState(win, state, 'active')
-    } else if (state.agentState === 'active') {
-      transitionAgentState(win, state, 'active') // reset cooldown timer
-    }
+      // Handle rename (atomic saves from editors like vim)
+      if (eventType === 'rename') {
+        // Close watcher without resetting agent state
+        if (state.watcher) {
+          state.watcher.close()
+          state.watcher = null
+        }
+        if (state.debounceTimer) {
+          clearTimeout(state.debounceTimer)
+          state.debounceTimer = null
+        }
+        // Re-read immediately since atomic save replaced the file
+        setTimeout(() => {
+          watchFile(win, state)
+          readTextDocument(filePath)
+            .then((data) => {
+              if (!win.isDestroyed()) win.webContents.send('file-changed', data)
+            })
+            .catch((error) => {
+              console.error('[watchFile] rename read error:', error)
+            })
+        }, 50)
+        return
+      }
 
-    if (state.debounceTimer) clearTimeout(state.debounceTimer)
-    state.debounceTimer = setTimeout(() => {
-      readFile(filePath, 'utf-8')
-        .then((data) => {
-          if (!win.isDestroyed()) win.webContents.send('file-changed', data)
-        })
-        .catch(() => {})
-    }, 100)
+      if (eventType !== 'change') return
+
+      // Agent activity detection
+      const now = Date.now()
+      const gap = now - state.lastExternalChange
+      state.lastExternalChange = now
+      if (gap > 0 && gap < AGENT_ACTIVE_GAP_MS) {
+        transitionAgentState(win, state, 'active')
+      } else if (state.agentState === 'active') {
+        transitionAgentState(win, state, 'active')
+      }
+
+      if (state.debounceTimer) clearTimeout(state.debounceTimer)
+      state.debounceTimer = setTimeout(() => {
+        readTextDocument(filePath)
+          .then((data) => {
+            if (!win.isDestroyed()) win.webContents.send('file-changed', data)
+          })
+          .catch((error) => {
+            console.error('[watchFile] read error:', error)
+            sendError(win, formatReadError(error))
+          })
+      }, FILE_DEBOUNCE_MS)
+    })
+  } catch (error) {
+    console.error('[watchFile] watch error:', error)
+    stopWatching(state)
+    setTimeout(() => watchFile(win, state), 500)
+    return
+  }
+
+  state.watcher.on('error', (error) => {
+    console.error('[watchFile] watcher error:', error)
+    stopWatching(state)
+    setTimeout(() => watchFile(win, state), 500)
   })
 }
 
-function loadFileInWindow(win: BrowserWindow, filePath: string): void {
-  readFile(filePath, 'utf-8')
-    .then((data) => {
-      const state = getState(win)
-      state.filePath = filePath
-      watchFile(win, state)
-      updateTitle(win)
-      win.webContents.send('file-opened', { path: filePath, content: data })
-    })
-    .catch(() => {})
+async function loadFileInWindow(win: BrowserWindow, filePath: string): Promise<void> {
+  const result = await openDocumentInWindow(win, filePath)
+  if (result && !win.isDestroyed()) {
+    win.webContents.send('file-opened', result)
+  }
 }
 
 // Find window that already has this file open
@@ -205,7 +288,7 @@ function openFile(filePath: string): void {
   // Find an untitled empty window to reuse
   const emptyWin = findEmptyWindow()
   if (emptyWin) {
-    loadFileInWindow(emptyWin, filePath)
+    void loadFileInWindow(emptyWin, filePath)
     emptyWin.focus()
     return
   }
@@ -233,10 +316,11 @@ async function saveToPath(win: BrowserWindow, filePath: string, content: string)
     watchFile(win, state)
     updateTitle(win)
     return true
-  } catch {
+  } catch (error) {
+    sendError(win, getErrorMessage(error, 'Could not save file.'))
     return false
   } finally {
-    setTimeout(() => { state.isInternalSave = false }, 100)
+    setTimeout(() => { state.isInternalSave = false }, INTERNAL_SAVE_SUPPRESS_MS)
   }
 }
 
@@ -266,15 +350,7 @@ ipcMain.handle('open-file', async (event) => {
   // If this window has no file, load here; otherwise open in new window
   const state = getState(win)
   if (!state.filePath) {
-    try {
-      const content = await readFile(filePath, 'utf-8')
-      state.filePath = filePath
-      watchFile(win, state)
-      updateTitle(win)
-      return { path: filePath, content }
-    } catch {
-      return null
-    }
+    return openDocumentInWindow(win, filePath)
   } else {
     openFile(filePath)
     return null
@@ -283,20 +359,12 @@ ipcMain.handle('open-file', async (event) => {
 
 ipcMain.handle('open-file-path', async (event, filePath: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return null
+  if (!win || typeof filePath !== 'string' || !filePath) return null
   const state = getState(win)
 
   // If this window has no file, load here
   if (!state.filePath) {
-    try {
-      const content = await readFile(filePath, 'utf-8')
-      state.filePath = filePath
-      watchFile(win, state)
-      updateTitle(win)
-      return { path: filePath, content }
-    } catch {
-      return null
-    }
+    return openDocumentInWindow(win, filePath)
   } else {
     openFile(filePath)
     return null
@@ -305,7 +373,7 @@ ipcMain.handle('open-file-path', async (event, filePath: string) => {
 
 ipcMain.handle('save-file', async (event, content: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return false
+  if (!win || typeof content !== 'string') return false
   const state = getState(win)
   if (!state.filePath) {
     const result = await dialog.showSaveDialog(win, {
@@ -323,7 +391,7 @@ ipcMain.handle('save-file', async (event, content: string) => {
 
 ipcMain.handle('save-file-as', async (event, content: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return false
+  if (!win || typeof content !== 'string') return false
   const result = await dialog.showSaveDialog(win, {
     defaultPath: suggestFileName(win, content),
     filters: [
@@ -344,27 +412,31 @@ ipcMain.handle('export-pdf', async (event) => {
   })
   if (result.canceled || !result.filePath) return false
 
+  let cssKey: string | null = null
   try {
     // Expand editor to full content height for printing
-    const cssKey = await win.webContents.insertCSS(
+    cssKey = await win.webContents.insertCSS(
       'html, body { height: auto !important; overflow: visible !important; } #titlebar { display: none !important; } #editor { height: auto !important; overflow: visible !important; } #editor .ProseMirror { min-height: auto !important; }'
     )
     const pdfData = await win.webContents.printToPDF({
-      marginType: 0,
       printBackground: true,
       pageSize: 'A4'
     })
-    await win.webContents.removeInsertedCSS(cssKey)
     await writeFile(result.filePath, pdfData)
     return true
-  } catch {
+  } catch (error) {
+    sendError(win, getErrorMessage(error, 'Could not export PDF.'))
     return false
+  } finally {
+    if (cssKey) {
+      try { await win.webContents.removeInsertedCSS(cssKey) } catch { /* ignore cleanup failure */ }
+    }
   }
 })
 
 ipcMain.handle('export-html', async (event, htmlContent: string) => {
   const win = getWinFromEvent(event)
-  if (!win) return false
+  if (!win || typeof htmlContent !== 'string') return false
   const result = await dialog.showSaveDialog(win, {
     defaultPath: suggestFileName(win),
     filters: [{ name: 'HTML', extensions: ['html'] }]
@@ -374,7 +446,8 @@ ipcMain.handle('export-html', async (event, htmlContent: string) => {
   try {
     await writeFile(result.filePath, htmlContent, 'utf-8')
     return true
-  } catch {
+  } catch (error) {
+    sendError(win, getErrorMessage(error, 'Could not export HTML.'))
     return false
   }
 })
@@ -389,6 +462,7 @@ ipcMain.handle('load-custom-theme', async (event) => {
   if (result.canceled || result.filePaths.length === 0) return null
 
   try {
+    await ensureThemesDir()
     const srcPath = result.filePaths[0]
     const fileName = basename(srcPath)
     const destPath = join(themesDir, fileName)
@@ -396,15 +470,25 @@ ipcMain.handle('load-custom-theme', async (event) => {
     const css = await readFile(destPath, 'utf-8')
     buildMenu() // rebuild menu to include new theme
     return { name: fileName, css }
-  } catch {
+  } catch (error) {
+    sendError(win, getErrorMessage(error, 'Could not import theme.'))
     return null
   }
 })
 
-ipcMain.handle('load-theme-css', async (_event, fileName: string) => {
+function resolveThemePath(fileName: string): string | null {
+  if (!fileName.endsWith('.css') || basename(fileName) !== fileName || fileName.includes('..')) return null
+  return join(themesDir, fileName)
+}
+
+ipcMain.handle('load-theme-css', async (event, fileName: string) => {
+  const win = getWinFromEvent(event)
   try {
-    return await readFile(join(themesDir, fileName), 'utf-8')
-  } catch {
+    const themePath = resolveThemePath(fileName)
+    if (!themePath) return null
+    return await readFile(themePath, 'utf-8')
+  } catch (error) {
+    if (win) sendError(win, getErrorMessage(error, 'Could not load theme CSS.'))
     return null
   }
 })
@@ -431,11 +515,14 @@ function buildMenu(): void {
       customThemeItems.push({
         label: file.replace(/\.css$/, ''),
         click: async () => {
+          const win = getFocusedWindow()
           try {
             const css = await readFile(join(themesDir, file), 'utf-8')
             sendToFocused('set-theme', `custom:${file}`)
             sendToFocused('set-custom-css', css)
-          } catch { /* ignore */ }
+          } catch (error) {
+            if (win) sendError(win, getErrorMessage(error, 'Could not load theme CSS.'))
+          }
         }
       })
     }
@@ -547,8 +634,8 @@ function buildMenu(): void {
 
 // App lifecycle
 
-app.whenReady().then(() => {
-  ensureThemesDir()
+app.whenReady().then(async () => {
+  await ensureThemesDir()
   buildMenu()
 
   // Check command line args for file paths
