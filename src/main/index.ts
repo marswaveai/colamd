@@ -27,6 +27,7 @@ interface WindowState {
   watcher: FSWatcher | null
   isInternalSave: boolean
   debounceTimer: ReturnType<typeof setTimeout> | null
+  rewatchTimer: ReturnType<typeof setTimeout> | null
   agentState: 'idle' | 'active' | 'cooldown'
   lastExternalChange: number
   agentCooldownTimer: ReturnType<typeof setTimeout> | null
@@ -38,7 +39,7 @@ let pendingFilePaths: string[] = []
 function getState(win: BrowserWindow): WindowState {
   let state = windowStates.get(win.id)
   if (!state) {
-    state = { filePath: null, watcher: null, isInternalSave: false, debounceTimer: null, agentState: 'idle', lastExternalChange: 0, agentCooldownTimer: null }
+    state = { filePath: null, watcher: null, isInternalSave: false, debounceTimer: null, rewatchTimer: null, agentState: 'idle', lastExternalChange: 0, agentCooldownTimer: null }
     windowStates.set(win.id, state)
   }
   return state
@@ -103,11 +104,23 @@ function suggestFileName(win: BrowserWindow, content?: string): string | undefin
   return match[1].trim().replace(/[/\\:*?"<>|]/g, '').slice(0, 60) || undefined
 }
 
-function stopWatching(state: WindowState): void {
+function clearWatchResources(state: WindowState): void {
   if (state.watcher) {
     state.watcher.close()
     state.watcher = null
   }
+  if (state.debounceTimer) {
+    clearTimeout(state.debounceTimer)
+    state.debounceTimer = null
+  }
+  if (state.rewatchTimer) {
+    clearTimeout(state.rewatchTimer)
+    state.rewatchTimer = null
+  }
+}
+
+function stopWatching(state: WindowState): void {
+  clearWatchResources(state)
   if (state.agentCooldownTimer) {
     clearTimeout(state.agentCooldownTimer)
     state.agentCooldownTimer = null
@@ -143,32 +156,73 @@ function transitionAgentState(win: BrowserWindow, state: WindowState, newState: 
   }
 }
 
-function watchFile(win: BrowserWindow, state: WindowState): void {
-  if (!state.filePath) return
-  stopWatching(state)
-  const filePath = state.filePath
-  state.watcher = watch(filePath, (eventType) => {
-    if (eventType !== 'change' || state.isInternalSave) return
+function markExternalChange(win: BrowserWindow, state: WindowState): void {
+  const now = Date.now()
+  const gap = now - state.lastExternalChange
+  state.lastExternalChange = now
 
-    // Agent activity detection
-    const now = Date.now()
-    const gap = now - state.lastExternalChange
-    state.lastExternalChange = now
-    if (gap > 0 && gap < 2000) {
-      transitionAgentState(win, state, 'active')
-    } else if (state.agentState === 'active') {
-      transitionAgentState(win, state, 'active') // reset cooldown timer
+  if (gap > 0 && gap < 2000) {
+    transitionAgentState(win, state, 'active')
+  } else if (state.agentState === 'active') {
+    transitionAgentState(win, state, 'active')
+  }
+}
+
+function scheduleFileReload(win: BrowserWindow, state: WindowState, filePath: string): void {
+  if (state.debounceTimer) clearTimeout(state.debounceTimer)
+  state.debounceTimer = setTimeout(() => {
+    state.debounceTimer = null
+    readFile(filePath, 'utf-8')
+      .then((data) => {
+        if (!win.isDestroyed()) win.webContents.send('file-changed', data)
+      })
+      .catch(() => {})
+  }, 100)
+}
+
+function scheduleRewatch(win: BrowserWindow, state: WindowState, filePath: string, attempt = 0): void {
+  if (state.filePath !== filePath) return
+  if (state.watcher) {
+    state.watcher.close()
+    state.watcher = null
+  }
+  if (state.rewatchTimer) clearTimeout(state.rewatchTimer)
+
+  const delay = Math.min(50 * 2 ** attempt, 1000)
+  state.rewatchTimer = setTimeout(() => {
+    state.rewatchTimer = null
+    if (state.filePath === filePath) {
+      watchFile(win, state, attempt + 1)
     }
+  }, delay)
+}
 
-    if (state.debounceTimer) clearTimeout(state.debounceTimer)
-    state.debounceTimer = setTimeout(() => {
-      readFile(filePath, 'utf-8')
-        .then((data) => {
-          if (!win.isDestroyed()) win.webContents.send('file-changed', data)
-        })
-        .catch(() => {})
-    }, 100)
-  })
+function watchFile(win: BrowserWindow, state: WindowState, attempt = 0): void {
+  if (!state.filePath) return
+
+  const filePath = state.filePath
+  clearWatchResources(state)
+
+  try {
+    state.watcher = watch(filePath, (eventType) => {
+      if (state.isInternalSave) return
+
+      markExternalChange(win, state)
+      scheduleFileReload(win, state, filePath)
+
+      // Many editors and AI tools save by renaming a temp file into place.
+      // Re-establish the watcher so live reload keeps working after atomic saves.
+      if (eventType === 'rename') {
+        scheduleRewatch(win, state, filePath)
+      }
+    })
+
+    state.watcher.on('error', () => {
+      scheduleRewatch(win, state, filePath, attempt)
+    })
+  } catch {
+    scheduleRewatch(win, state, filePath, attempt)
+  }
 }
 
 function loadFileInWindow(win: BrowserWindow, filePath: string): void {
